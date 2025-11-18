@@ -22,8 +22,26 @@ if (missingEnvVars.length > 0 || missingOptional.length > 0) {
 // Log de confirmação (apenas em desenvolvimento)
 if (process.env.NODE_ENV !== 'production') {
     console.log('✅ Variáveis de ambiente carregadas com sucesso!');
-    console.log(`   JWT_SECRET: ${process.env.JWT_SECRET ? '✅ Configurado' : '❌ Não configurado'}`);
-    console.log(`   FRONTEND_URL: ${process.env.FRONTEND_URL || '❌ Não configurado'}`);
+    if (process.env.JWT_SECRET) {
+        console.log('   JWT_SECRET: ✅ Configurado');
+    } else {
+        console.warn('   JWT_SECRET: ❌ NÃO configurado');
+    }
+}
+
+// Preferência: aceitar ambos os nomes e validar somente em production
+const FRONTEND_URL = process.env.URL_FRONTEND || process.env.FRONTEND_URL || process.env.URL_FRONTEND;
+
+if (process.env.NODE_ENV === 'production' && !FRONTEND_URL) {
+    console.error('❌ ERRO: Variáveis de ambientes obrigatórios não definidas:');
+    console.error('   - URL_FRONTEND (ou FRONTEND_URL)');
+    process.exit(1);
+} else {
+    if (!FRONTEND_URL) {
+        console.warn('⚠️ URL_FRONTEND não definida — usando valor padrão/relativo (apenas dev).');
+    } else {
+        console.log(`   URL_FRONTEND: ${FRONTEND_URL}`);
+    }
 }
 
 // Importar a conexão com o banco de dados para garantir que ela seja inicializada
