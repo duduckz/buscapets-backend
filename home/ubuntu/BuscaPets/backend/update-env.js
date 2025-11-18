@@ -89,7 +89,7 @@ JWT_SECRET=${jwtSecret}
 # ============================================
 # Configurações do Frontend
 # ============================================
-FRONTEND_URL=${frontendUrl}
+URL_FRONTEND=${frontendUrl}
 
 # ============================================
 # Configurações do Servidor
