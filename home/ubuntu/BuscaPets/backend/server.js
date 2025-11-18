@@ -3,71 +3,73 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 
-// Validar variáveis de ambiente críticas
-// DB_PASSWORD pode estar vazia (comum em desenvolvimento local)
-const requiredEnvVars = ['JWT_SECRET', 'DB_HOST', 'DB_USER', 'DB_DATABASE', 'FRONTEND_URL'];
-const optionalButRequiredKeys = ['DB_PASSWORD']; // Deve existir, mas pode estar vazia
+// Variáveis obrigatórias (não exigir FRONTEND em dev)
+const requiredEnvVars = ['JWT_SECRET', 'DB_HOST', 'DB_USER', 'DB_DATABASE'];
 const missingEnvVars = requiredEnvVars.filter(envVar => !process.env[envVar]);
-const missingOptional = optionalButRequiredKeys.filter(envVar => process.env[envVar] === undefined);
 
-if (missingEnvVars.length > 0 || missingOptional.length > 0) {
+if (missingEnvVars.length > 0) {
     console.error('❌ ERRO: Variáveis de ambiente obrigatórias não configuradas:');
     missingEnvVars.forEach(envVar => console.error(`   - ${envVar}`));
-    missingOptional.forEach(envVar => console.error(`   - ${envVar} (deve existir no .env, mesmo que vazia)`));
-    console.error('\n💡 Crie um arquivo .env na raiz do projeto com as variáveis necessárias.');
-    console.error('   Veja o arquivo .env.example para referência.\n');
+    console.error('\n💡 Configure essas variáveis no .env local e no painel do Railway.');
     process.exit(1);
 }
 
-// Log de confirmação (apenas em desenvolvimento)
-if (process.env.NODE_ENV !== 'production') {
-    console.log('✅ Variáveis de ambiente carregadas com sucesso!');
-    if (process.env.JWT_SECRET) {
-        console.log('   JWT_SECRET: ✅ Configurado');
-    } else {
-        console.warn('   JWT_SECRET: ❌ NÃO configurado');
-    }
-}
+// Aceita ambos os nomes: URL_FRONTEND ou FRONTEND_URL
+const FRONTEND_URL = process.env.URL_FRONTEND || process.env.FRONTEND_URL || '';
 
-// Preferência: aceitar ambos os nomes e validar somente em production
-const FRONTEND_URL = process.env.URL_FRONTEND || process.env.FRONTEND_URL || process.env.URL_FRONTEND;
-
+// Em production exigir FRONTEND_URL
 if (process.env.NODE_ENV === 'production' && !FRONTEND_URL) {
-    console.error('❌ ERRO: Variáveis de ambientes obrigatórios não definidas:');
-    console.error('   - URL_FRONTEND (ou FRONTEND_URL)');
+    console.error('❌ ERRO: URL_FRONTEND (ou FRONTEND_URL) não definida em produção.');
     process.exit(1);
-} else {
-    if (!FRONTEND_URL) {
-        console.warn('⚠️ URL_FRONTEND não definida — usando valor padrão/relativo (apenas dev).');
-    } else {
-        console.log(`   URL_FRONTEND: ${FRONTEND_URL}`);
-    }
 }
 
-// Importar a conexão com o banco de dados para garantir que ela seja inicializada
-require('./config/db');
+// Logs informativos
+if (process.env.NODE_ENV !== 'production') {
+    console.log('✅ Variáveis de ambiente carregadas (dev):');
+    console.log(`   JWT_SECRET: ${process.env.JWT_SECRET ? '✅' : '❌ NÃO configurado'}`);
+}
+console.log(`   FRONTEND_URL: ${FRONTEND_URL || 'não definido (apenas dev)'}`);
+
+// Inicializar DB (se existir)
+try {
+    require('./config/db');
+} catch (err) {
+    console.warn('⚠️ Aviso ao carregar ./config/db:', err.message);
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middlewares
-// Configurar CORS para aceitar apenas a URL do frontend (não usar '*' em produção)
+// CORS dinâmico e seguro
 const corsOptions = {
-  origin: process.env.FRONTEND_URL,
-  credentials: true,
-  optionsSuccessStatus: 200
+    origin: function (origin, callback) {
+        if (!origin) return callback(null, true); // server-to-server or curl
+
+        if (process.env.NODE_ENV === 'production') {
+            if (origin === FRONTEND_URL) return callback(null, true);
+            return callback(new Error('Origin não permitida pelo CORS'), false);
+        } else {
+            const allowed = [
+                'http://localhost:3000',
+                'http://127.0.0.1:3000',
+                FRONTEND_URL
+            ].filter(Boolean);
+            if (allowed.includes(origin)) return callback(null, true);
+            return callback(null, true); // liberal in dev
+        }
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
+    optionsSuccessStatus: 204
 };
 
-if (!process.env.FRONTEND_URL) {
-    console.error('❌ ERRO: FRONTEND_URL não está configurada no .env');
-    process.exit(1);
-}
-
 app.use(cors(corsOptions));
-app.use(express.json()); // Para parsear application/json
-app.use(express.urlencoded({ extended: true })); // Para parsear application/x-www-form-urlencoded
+app.options('*', cors(corsOptions)); // preflight
 
-// Servir arquivos estáticos (imagens de upload)
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
 const uploadDir = path.join(__dirname, process.env.UPLOAD_DIR || 'uploads');
 app.use('/uploads', express.static(uploadDir));
 
@@ -82,41 +84,28 @@ app.use('/api/pets', petRoutes);
 app.use('/api/mensagens', messageRoutes);
 app.use('/api/adocoes', adoptionRoutes);
 
-// Rota de teste
-app.get('/', (req, res) => {
-    res.send('API BuscaPet funcionando!');
-});
+// Health check
+app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
+app.get('/', (req, res) => res.send('API BuscaPet funcionando!'));
 
-// Tratamento de erro 404
-app.use((req, res, next) => {
-    res.status(404).json({ message: 'Rota não encontrada' });
-});
+// 404
+app.use((req, res) => res.status(404).json({ message: 'Rota não encontrada' }));
 
-// Tratamento de erro geral
+// Error handler
 app.use((err, req, res, next) => {
-    console.error(err.stack);
+    console.error(err.stack || err.message);
+    if (err && err.message && err.message.includes('Origin não permitida')) {
+        return res.status(403).json({ message: 'Origin não permitida pelo CORS' });
+    }
     res.status(500).json({ message: 'Erro interno do servidor', error: err.message });
 });
 
 const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`✅ Servidor rodando na porta ${PORT}`);
-    console.log(`📡 API disponível em: http://localhost:${PORT}`);
-    console.log(`🔗 Frontend configurado: ${process.env.FRONTEND_URL}\n`);
+    console.log(`🔗 Frontend configurado: ${FRONTEND_URL || 'não definido'}`);
 });
 
-// Tratamento de erro na porta
 server.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-        console.error(`\n❌ ERRO: Porta ${PORT} já está em uso!\n`);
-        console.error('💡 Soluções:');
-        console.error(`   1. Execute o script: .\\kill-port.ps1`);
-        console.error(`   2. Ou encontre e encerre o processo manualmente:`);
-        console.error(`      netstat -ano | findstr :${PORT}`);
-        console.error(`      taskkill /PID <PID> /F`);
-        console.error(`   3. Ou altere a porta no arquivo .env (PORT=3001)\n`);
-        process.exit(1);
-    } else {
-        console.error('❌ Erro ao iniciar servidor:', err.message);
-        process.exit(1);
-    }
+    console.error('❌ Erro no servidor:', err.message);
+    process.exit(1);
 });
