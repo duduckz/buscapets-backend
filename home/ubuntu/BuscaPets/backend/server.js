@@ -54,7 +54,14 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options('/*', cors(corsOptions)); // preflight
+
+// ADICIONE este middleware seguro para tratar preflight:
+app.use((req, res, next) => {
+  if (req.method === 'OPTIONS') {
+    return cors(corsOptions)(req, res, next);
+  }
+  next();
+});
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
